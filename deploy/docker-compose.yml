@@ -1,0 +1,217 @@
+services:
+  reverse-proxy:
+    image: traefik:v3.1
+    command:
+      - --providers.docker=true
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      - --api.dashboard=true
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - frontend
+      - management
+
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ../database/postgres_schema.sql:/docker-entrypoint-initdb.d/001_schema.sql:ro
+    networks:
+      - database
+
+  redis:
+    image: redis:7
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    networks:
+      - database
+      - processing
+
+  redpanda:
+    image: redpandadata/redpanda:v24.2.3
+    command:
+      - redpanda
+      - start
+      - --overprovisioned
+      - --smp
+      - "1"
+      - --memory
+      - 1G
+      - --reserve-memory
+      - 0M
+      - --node-id
+      - "0"
+      - --check=false
+      - --kafka-addr
+      - PLAINTEXT://0.0.0.0:9092
+      - --advertise-kafka-addr
+      - PLAINTEXT://redpanda:9092
+    networks:
+      - ingestion
+      - processing
+    volumes:
+      - redpanda-data:/var/lib/redpanda/data
+
+  opensearch:
+    image: opensearchproject/opensearch:2.15.0
+    environment:
+      discovery.type: single-node
+      plugins.security.disabled: "true"
+      OPENSEARCH_INITIAL_ADMIN_PASSWORD: ${OPENSEARCH_INITIAL_ADMIN_PASSWORD}
+      OPENSEARCH_JAVA_OPTS: -Xms1g -Xmx1g
+    volumes:
+      - opensearch-data:/usr/share/opensearch/data
+    networks:
+      - database
+
+  neo4j:
+    image: neo4j:5-community
+    environment:
+      NEO4J_AUTH: ${NEO4J_AUTH}
+      NEO4J_dbms_memory_heap_initial__size: 512m
+      NEO4J_dbms_memory_heap_max__size: 1G
+    volumes:
+      - neo4j-data:/data
+      - neo4j-logs:/logs
+      - ../graph:/import/graph:ro
+    networks:
+      - database
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:25.0
+    command: ["start-dev"]
+    environment:
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
+    networks:
+      - management
+      - database
+
+  api:
+    image: ghcr.io/example/threat-dashboard-api:latest
+    profiles: ["app"]
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      REDIS_URL: redis://redis:6379/0
+      KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
+      OPENSEARCH_URL: http://opensearch:9200
+      NEO4J_URI: bolt://neo4j:7687
+      OIDC_ISSUER: ${OIDC_ISSUER}
+    depends_on:
+      - postgres
+      - redis
+      - redpanda
+      - opensearch
+      - neo4j
+      - keycloak
+    networks:
+      - frontend
+      - processing
+      - database
+
+  frontend:
+    image: ghcr.io/example/threat-dashboard-frontend:latest
+    profiles: ["app"]
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL}
+    depends_on:
+      - api
+    networks:
+      - frontend
+
+  normalization-worker:
+    image: ghcr.io/example/threat-dashboard-worker:latest
+    profiles: ["workers"]
+    command: ["worker", "normalize"]
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
+      OPENSEARCH_URL: http://opensearch:9200
+    depends_on:
+      - redpanda
+      - postgres
+      - opensearch
+    networks:
+      - processing
+      - database
+
+  enrichment-worker:
+    image: ghcr.io/example/threat-dashboard-worker:latest
+    profiles: ["workers"]
+    command: ["worker", "enrich"]
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
+      REDIS_URL: redis://redis:6379/0
+      OPENSEARCH_URL: http://opensearch:9200
+      NEO4J_URI: bolt://neo4j:7687
+    depends_on:
+      - redpanda
+      - postgres
+      - redis
+      - opensearch
+      - neo4j
+    networks:
+      - processing
+      - database
+
+  opencti-connector:
+    image: ghcr.io/example/threat-dashboard-worker:latest
+    profiles: ["cti"]
+    command: ["worker", "opencti"]
+    environment:
+      OPENCTI_URL: ${OPENCTI_URL}
+      OPENCTI_TOKEN: ${OPENCTI_TOKEN}
+      KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
+    networks:
+      - processing
+
+  misp-connector:
+    image: ghcr.io/example/threat-dashboard-worker:latest
+    profiles: ["cti"]
+    command: ["worker", "misp"]
+    environment:
+      MISP_URL: ${MISP_URL}
+      MISP_API_KEY: ${MISP_API_KEY}
+      KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
+    networks:
+      - processing
+
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    profiles: ["monitoring"]
+    networks:
+      - management
+      - processing
+
+  grafana:
+    image: grafana/grafana:11.1.0
+    profiles: ["monitoring"]
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
+    networks:
+      - management
+
+volumes:
+  postgres-data:
+  redis-data:
+  redpanda-data:
+  opensearch-data:
+  neo4j-data:
+  neo4j-logs:
+
+networks:
+  frontend:
+  ingestion:
+  processing:
+  database:
+  management:
