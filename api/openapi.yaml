@@ -1,0 +1,467 @@
+openapi: 3.1.0
+info:
+  title: Custom Threat Intelligence & Honeypot Analytics Platform API
+  version: 0.1.0
+  description: API contract for T-Pot honeypot analytics and CTI correlation dashboards.
+servers:
+  - url: https://threat-dashboard.example.com
+security:
+  - oidc: []
+components:
+  securitySchemes:
+    oidc:
+      type: openIdConnect
+      openIdConnectUrl: https://keycloak.example.com/realms/threat-intel/.well-known/openid-configuration
+    apiKey:
+      type: apiKey
+      in: header
+      name: X-API-Key
+  parameters:
+    TimeRange:
+      name: time_range
+      in: query
+      schema:
+        type: string
+        default: 24h
+      description: Relative time range such as 15m, 1h, 24h, 7d, or 30d.
+    Country:
+      name: country
+      in: query
+      schema:
+        type: string
+    Honeypot:
+      name: honeypot
+      in: query
+      schema:
+        type: string
+    Port:
+      name: port
+      in: query
+      schema:
+        type: integer
+        minimum: 0
+        maximum: 65535
+    Protocol:
+      name: protocol
+      in: query
+      schema:
+        type: string
+    ASN:
+      name: asn
+      in: query
+      schema:
+        type: integer
+    Reputation:
+      name: reputation
+      in: query
+      schema:
+        type: string
+    SourceIP:
+      name: source_ip
+      in: query
+      schema:
+        type: string
+  schemas:
+    Summary:
+      type: object
+      properties:
+        total_events:
+          type: integer
+        unique_source_ips:
+          type: integer
+        unique_countries:
+          type: integer
+        unique_asns:
+          type: integer
+        high_risk_events:
+          type: integer
+        cti_correlation_rate:
+          type: number
+    AttackEvent:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        observed_at:
+          type: string
+          format: date-time
+        source_ip:
+          type: string
+        country:
+          type: string
+        asn:
+          type: integer
+        honeypot:
+          type: string
+        destination_port:
+          type: integer
+        protocol:
+          type: string
+        event_type:
+          type: string
+        reputation_category:
+          type: string
+        risk_score:
+          type: integer
+        suricata_signature:
+          type: string
+        cve_ids:
+          type: array
+          items:
+            type: string
+    RankingItem:
+      type: object
+      properties:
+        key:
+          type: string
+        label:
+          type: string
+        count:
+          type: integer
+        unique_sources:
+          type: integer
+        risk_score:
+          type: number
+    TimeseriesPoint:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        count:
+          type: integer
+        series:
+          type: string
+    CorrelationFinding:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        attack_event_id:
+          type: string
+          format: uuid
+        cti_object_id:
+          type: string
+          format: uuid
+        correlation_type:
+          type: string
+        confidence:
+          type: integer
+        risk_score:
+          type: integer
+        status:
+          type: string
+        explanation:
+          type: object
+paths:
+  /api/v1/overview/summary:
+    get:
+      summary: Dashboard KPI summary.
+      parameters:
+        - $ref: '#/components/parameters/TimeRange'
+        - $ref: '#/components/parameters/Country'
+        - $ref: '#/components/parameters/Honeypot'
+        - $ref: '#/components/parameters/Port'
+        - $ref: '#/components/parameters/Protocol'
+        - $ref: '#/components/parameters/ASN'
+        - $ref: '#/components/parameters/Reputation'
+        - $ref: '#/components/parameters/SourceIP'
+      responses:
+        '200':
+          description: Summary metrics.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Summary'
+  /api/v1/attacks:
+    get:
+      summary: Paginated enriched attack events.
+      parameters:
+        - $ref: '#/components/parameters/TimeRange'
+        - $ref: '#/components/parameters/SourceIP'
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 100
+            maximum: 1000
+        - name: cursor
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Attack event page.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AttackEvent'
+                  next_cursor:
+                    type: string
+  /api/v1/attacks/top-sources:
+    get:
+      summary: Top source IP rankings.
+      parameters:
+        - $ref: '#/components/parameters/TimeRange'
+      responses:
+        '200':
+          description: Ranked source IPs.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/RankingItem'
+  /api/v1/attacks/top-countries:
+    get:
+      summary: Top country rankings.
+      parameters:
+        - $ref: '#/components/parameters/TimeRange'
+      responses:
+        '200':
+          description: Ranked countries.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/RankingItem'
+  /api/v1/attacks/top-asns:
+    get:
+      summary: Top ASN rankings.
+      parameters:
+        - $ref: '#/components/parameters/TimeRange'
+      responses:
+        '200':
+          description: Ranked ASNs.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/RankingItem'
+  /api/v1/attacks/timeseries:
+    get:
+      summary: Attack volume over time.
+      parameters:
+        - $ref: '#/components/parameters/TimeRange'
+        - name: interval
+          in: query
+          schema:
+            type: string
+            default: 1h
+      responses:
+        '200':
+          description: Time series points.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/TimeseriesPoint'
+  /api/v1/honeypots/distribution:
+    get:
+      summary: Honeypot attack distribution.
+      parameters:
+        - $ref: '#/components/parameters/TimeRange'
+      responses:
+        '200':
+          description: Honeypot distribution.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/RankingItem'
+  /api/v1/ports/histogram:
+    get:
+      summary: Destination port histogram.
+      parameters:
+        - $ref: '#/components/parameters/TimeRange'
+      responses:
+        '200':
+          description: Port histogram.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/RankingItem'
+  /api/v1/credentials/usernames:
+    get:
+      summary: Username tag cloud data.
+      parameters:
+        - $ref: '#/components/parameters/TimeRange'
+      responses:
+        '200':
+          description: Username counts.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/RankingItem'
+  /api/v1/credentials/passwords:
+    get:
+      summary: Password tag cloud data. Requires sensitive-field permission for raw values.
+      parameters:
+        - $ref: '#/components/parameters/TimeRange'
+      responses:
+        '200':
+          description: Password counts.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/RankingItem'
+  /api/v1/suricata/categories:
+    get:
+      summary: Suricata alert category aggregation.
+      responses:
+        '200':
+          description: Category rankings.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/RankingItem'
+  /api/v1/suricata/cves/top:
+    get:
+      summary: Top CVEs from Suricata alerts.
+      responses:
+        '200':
+          description: CVE rankings.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/RankingItem'
+  /api/v1/suricata/signatures/top:
+    get:
+      summary: Top Suricata signatures.
+      responses:
+        '200':
+          description: Signature rankings.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/RankingItem'
+  /api/v1/reputation/summary:
+    get:
+      summary: Reputation category distribution.
+      responses:
+        '200':
+          description: Reputation distribution.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/RankingItem'
+  /api/v1/cti/indicators:
+    get:
+      summary: Search CTI indicators.
+      parameters:
+        - name: query
+          in: query
+          schema:
+            type: string
+        - name: type
+          in: query
+          schema:
+            type: string
+        - name: source
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Indicator search results.
+  /api/v1/correlations:
+    get:
+      summary: Correlation findings.
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+        - name: min_risk
+          in: query
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Correlation finding list.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/CorrelationFinding'
+  /api/v1/correlations/{finding_id}/review:
+    post:
+      summary: Review a correlation finding.
+      parameters:
+        - name: finding_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status:
+                  type: string
+                  enum: [valid, false_positive, duplicate, needs_investigation]
+                note:
+                  type: string
+      responses:
+        '200':
+          description: Updated finding.
+  /api/v1/graph/entity/{entity_type}/{entity_id}:
+    get:
+      summary: Entity graph neighborhood.
+      parameters:
+        - name: entity_type
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: entity_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: depth
+          in: query
+          schema:
+            type: integer
+            default: 2
+            maximum: 5
+      responses:
+        '200':
+          description: Graph nodes and edges.
+  /api/v1/live/attacks:
+    get:
+      summary: WebSocket endpoint for real-time enriched attack events.
+      responses:
+        '101':
+          description: WebSocket upgrade.
